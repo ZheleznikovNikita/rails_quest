@@ -1,0 +1,11 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  title: Mission One
+  status: pending
+  agent: one
+
+two:
+  title: Mission Two
+  status: in_progress
+  agent: two
