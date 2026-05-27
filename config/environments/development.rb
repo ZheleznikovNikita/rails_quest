@@ -72,6 +72,8 @@ Rails.application.configure do
 
   # Allow requests from GitHub Codespaces host
   config.hosts << "cautious-spoon-jjjg9rxxg9x2vx5-3000.app.github.dev"
+  config.hosts << "legendary-trout-r975qrjv956c5w5v-3000.app.github.dev"
+
 
   # Raise error when a before_action's only/except options reference missing actions.
   config.action_controller.raise_on_missing_callback_actions = true
