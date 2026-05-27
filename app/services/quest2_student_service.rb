@@ -1,5 +1,5 @@
 class Quest2StudentService
-  SEEDED_AGENT_CODENAMES = %w[Atlas Echo Nova Viper].freeze
+  SEEDED_AGENT_CODENAMES = ["Atlas", "Echo", "Nova", "Viper"].freeze
   SEEDED_MISSION_TITLES = [
     "Ember Trace",
     "Frozen Cipher",
@@ -12,12 +12,12 @@ class Quest2StudentService
     "Silent Echo",
     "Solar Tide"
   ].freeze
-  SEEDED_SKILL_NAMES = %w[Cryptography Field\ Medicine Infiltration Negotiation Recon].freeze
+  SEEDED_SKILL_NAMES = ["Cryptography", "Field Medicine", "Infiltration", "Negotiation", "Recon"].freeze
 
   class << self
     # @return [String]
     def all_agents
-      seeded_agents.order(:codename).pluck(:codename).join("\n")
+      Agent.where(codename: SEEDED_AGENT_CODENAMES).order(:codename).pluck(:codename).join("\n")
     end
 
     # @return [String]
@@ -27,48 +27,87 @@ class Quest2StudentService
 
     # @return [String]
     def agents_with_missions
-      seeded_agents.includes(:missions).map do |agent|
-        missions = agent.missions.where(title: SEEDED_MISSION_TITLES).order(:title).pluck(:title)
-        "#{agent.codename}: #{missions.join(', ')}"
-      end.join("\n")
+      mission_titles_sql = SEEDED_MISSION_TITLES.map { |t| ActiveRecord::Base.connection.quote(t) }.join(", ")
+
+      missions_subq = <<~SQL.squish
+        (SELECT group_concat(t.title, ', ') FROM (
+          SELECT title FROM missions WHERE agent_id = agents.id AND title IN (#{mission_titles_sql}) ORDER BY title
+        ) t)
+      SQL
+
+      Agent.where(codename: SEEDED_AGENT_CODENAMES)
+           .order(:codename)
+           .select("agents.codename, #{missions_subq} AS missions_list")
+           .map { |a| "#{a.codename}: #{a.attributes['missions_list']}" }
+           .join("\n")
     end
 
     # @return [String]
     def agents_with_missions_sorted_by_mission_count
-      seeded_agents.includes(:missions).to_a
-                   .sort_by { |agent| [-agent.missions.where(title: SEEDED_MISSION_TITLES).size, agent.codename] }
-                   .map do |agent|
-                     missions = agent.missions.where(title: SEEDED_MISSION_TITLES).order(:title).pluck(:title)
-                     count = missions.size
-                     "#{agent.codename} (#{count}): #{missions.join(', ')}"
-                   end.join("\n")
+      mission_titles_sql = SEEDED_MISSION_TITLES.map { |t| ActiveRecord::Base.connection.quote(t) }.join(", ")
+
+      missions_list_subq = <<~SQL.squish
+        (SELECT group_concat(t.title, ', ') FROM (
+          SELECT title FROM missions WHERE agent_id = agents.id AND title IN (#{mission_titles_sql}) ORDER BY title
+        ) t)
+      SQL
+
+      missions_count_subq = <<~SQL.squish
+        (SELECT COUNT(*) FROM missions WHERE agent_id = agents.id AND title IN (#{mission_titles_sql}))
+      SQL
+
+      Agent.where(codename: SEEDED_AGENT_CODENAMES)
+           .select("agents.codename, #{missions_list_subq} AS missions_list, #{missions_count_subq} AS missions_count")
+           .map { |a| [a.codename, a.attributes['missions_count'].to_i, a.attributes['missions_list']] }
+           .sort_by { |codename, count, _| [-count, codename] }
+           .map { |codename, count, list| "#{codename} (#{count}): #{list}" }
+           .join("\n")
     end
 
     # @return [String]
     def agents_with_skills
-      seeded_agents.includes(:skills).map do |agent|
-        skills = agent.skills.where(name: SEEDED_SKILL_NAMES).order(:name).pluck(:name)
-        "#{agent.codename}: #{skills.join(', ')}"
-      end.join("\n")
+      skill_names_sql = SEEDED_SKILL_NAMES.map { |t| ActiveRecord::Base.connection.quote(t) }.join(", ")
+
+      skills_list_subq = <<~SQL.squish
+        (SELECT group_concat(t.name, ', ') FROM (
+          SELECT s.name FROM skills s
+          JOIN agent_skills ag ON ag.skill_id = s.id
+          WHERE ag.agent_id = agents.id AND s.name IN (#{skill_names_sql})
+          ORDER BY s.name
+        ) t)
+      SQL
+
+      Agent.where(codename: SEEDED_AGENT_CODENAMES)
+           .order(:codename)
+           .select("agents.codename, #{skills_list_subq} AS skills_list")
+           .map { |a| "#{a.codename}: #{a.attributes['skills_list']}" }
+           .join("\n")
     end
 
     # @return [String]
     def skills_by_agent_count
+      agent_codenames_sql = SEEDED_AGENT_CODENAMES.map { |t| ActiveRecord::Base.connection.quote(t) }.join(", ")
+
+      agents_count_subq = <<~SQL.squish
+        (SELECT COUNT(DISTINCT ag.agent_id) FROM agent_skills ag
+         JOIN agents a ON a.id = ag.agent_id
+         WHERE ag.skill_id = skills.id AND a.codename IN (#{agent_codenames_sql}))
+      SQL
+
+      agents_list_subq = <<~SQL.squish
+        (SELECT group_concat(t.codename, ', ') FROM (
+          SELECT a.codename FROM agent_skills ag
+          JOIN agents a ON a.id = ag.agent_id
+          WHERE ag.skill_id = skills.id AND a.codename IN (#{agent_codenames_sql})
+          ORDER BY a.codename
+        ) t)
+      SQL
+
       Skill.where(name: SEEDED_SKILL_NAMES)
-           .left_joins(:agent_skills)
-           .group("skills.id")
-           .select("skills.*, COUNT(agent_skills.id) AS agents_count")
+           .select("skills.name, #{agents_count_subq} AS agents_count, #{agents_list_subq} AS agents_list")
            .order("agents_count DESC, skills.name ASC")
-           .map do |skill|
-             agents = skill.agents.where(codename: SEEDED_AGENT_CODENAMES).order(:codename).pluck(:codename)
-             "#{skill.name} (#{skill.read_attribute(:agents_count)}): #{agents.join(', ')}"
-           end.join("\n")
-    end
-
-    private
-
-    def seeded_agents
-      Agent.where(codename: SEEDED_AGENT_CODENAMES)
+           .map { |s| "#{s.name} (#{s.attributes['agents_count'].to_i}): #{s.attributes['agents_list']}" }
+           .join("\n")
     end
   end
 end
